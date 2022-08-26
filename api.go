@@ -1,9 +1,13 @@
-package ipfs
+package ipfs_crud
 
 import (
 	"context"
 	"fmt"
+	"github.com/ipfs/kubo/plugin/loader"
 	"io"
+	"os"
+	"path/filepath"
+	"sync"
 
 	icore "github.com/ipfs/interface-go-ipfs-core"
 	"github.com/ipfs/kubo/config"
@@ -13,8 +17,37 @@ import (
 	"github.com/ipfs/kubo/repo/fsrepo"
 )
 
+func setupPlugins(externalPluginsPath string) error {
+	// Load any external plugins if available on externalPluginsPath
+	plugins, err := loader.NewPluginLoader(filepath.Join(externalPluginsPath, "plugins"))
+	if err != nil {
+		return fmt.Errorf("error loading plugins: %s", err)
+	}
+
+	// Load preloaded and external plugins
+	if err := plugins.Initialize(); err != nil {
+		return fmt.Errorf("error initializing plugins: %s", err)
+	}
+
+	if err := plugins.Inject(); err != nil {
+		return fmt.Errorf("error initializing plugins: %s", err)
+	}
+
+	return nil
+}
+
+var loadPluginsOnce sync.Once
+
 // InitRepoAndGetApi get ipfs core api entry
-func InitRepoAndGetApi(ctx context.Context, repoPath string, isLocal bool) (icore.CoreAPI, error) {
+func InitRepoAndGetApi(ctx context.Context, isLocal bool) (icore.CoreAPI, error) {
+	var onceErr error
+	loadPluginsOnce.Do(func() {
+		onceErr = setupPlugins("")
+	})
+	if onceErr != nil {
+		return nil, onceErr
+	}
+
 	cfg, err := config.Init(io.Discard, 2048)
 	if err != nil {
 		return nil, err
@@ -34,6 +67,11 @@ func InitRepoAndGetApi(ctx context.Context, repoPath string, isLocal bool) (icor
 	}
 
 	// Create the repo with the config
+	repoPath, err := os.MkdirTemp("", "ipfs-shell")
+	if err != nil {
+		return nil, fmt.Errorf("failed to get temp dir: %s", err)
+	}
+
 	err = fsrepo.Init(repoPath, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("failed to init ephemeral node: %s", err.Error())
